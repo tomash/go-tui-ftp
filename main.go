@@ -1,12 +1,12 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"simple-ftp-client/ftp"
 	"simple-ftp-client/state"
 	"simple-ftp-client/ui"
 
@@ -19,11 +19,14 @@ func main() {
 
 	app := tview.NewApplication()
 
+	// Initialize State and FTP Client separately to keep them decoupled
 	stateData := &state.AppState{
-		UpdateCh: make(chan state.StateEvent, 10),
+		UpdateCh: make(chan state.StateEvent, 20),
 	}
+	ftpClient := ftp.NewClient()
 
-	layout := ui.NewLayout(stateData, app)
+	// Pass both into the UI builder
+	layout := ui.NewLayout(stateData, app, ftpClient)
 
 	go func() {
 		<-done
@@ -34,5 +37,5 @@ func main() {
 		log.Fatalf("UI error: %v", err)
 	}
 
-	fmt.Println("\nShutting down cleanly. Goodbye!")
+	println("\nShutting down cleanly.")
 }

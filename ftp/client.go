@@ -1,25 +1,67 @@
 package ftp
 
-import "fmt"
+import (
+	"fmt"
 
-// Client wraps FTP operations. Will be fleshed out in Phase 2.
+	ftplib "github.com/jlaffaye/ftp"
+)
+
+// Client wraps the FTP connection logic
 type Client struct {
-	Host string
-	Port int
+	conn *ftplib.ServerConn
 }
 
-func NewClient(host string, port int) *Client {
-	return &Client{Host: host, Port: port}
+func NewClient() *Client {
+	return &Client{}
 }
 
-func (c *Client) Connect(user, pass string) error {
-	return fmt.Errorf("not implemented yet")
+// Connect handles authentication. Address always includes an explicit port for net.Dial.
+func (c *Client) Connect(host string, port int, user, pass string) error {
+	if c.conn != nil {
+		_ = c.conn.Quit()
+		c.conn = nil
+	}
+
+	addr := fmt.Sprintf("%s:%d", host, port)
+	conn, err := ftplib.Dial(addr, ftplib.DialWithTimeout(ftplib.DefaultDialTimeout))
+	if err != nil {
+		return err
+	}
+
+	if err := conn.Login(user, pass); err != nil {
+		_ = conn.Quit()
+		return err
+	}
+
+	c.conn = conn
+	return nil
 }
 
+// ListDir returns entry names in the given path (uses MLSD when supported).
 func (c *Client) ListDir(path string) ([]string, error) {
-	return nil, fmt.Errorf("not implemented yet")
+	if c.conn == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	entries, err := c.conn.List(path)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e != nil && e.Name != "" {
+			names = append(names, e.Name)
+		}
+	}
+	return names, nil
 }
 
-// Upload/Download stubs for future implementation
-func (c *Client) Upload(localPath, remoteName string) error   { return nil }
-func (c *Client) Download(remotePath, localDest string) error { return nil }
+func (c *Client) Disconnect() error {
+	if c.conn == nil {
+		return nil
+	}
+	err := c.conn.Quit()
+	c.conn = nil
+	return err
+}

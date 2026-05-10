@@ -1,51 +1,81 @@
 package ui
 
 import (
+	"fmt"
 	"simple-ftp-client/state"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
-func NewLayout(state *state.AppState, app *tview.Application) tview.Primitive {
-	// Setup Status Bar: Green text, strictly no word wrapping to force horizontal flow
-	statusBar := tview.NewTextView().
-		SetWordWrap(false). // Critical for Windows consoles
-		SetRegions(false).
-		SetTextColor(tcell.ColorGreen).
-		SetTextAlign(tview.AlignLeft)
+type FTPDriver interface {
+	Connect(host string, port int, user, pass string) error
+	ListDir(path string) ([]string, error)
+	Disconnect() error
+}
 
-	mainContent := tview.NewBox().SetBorder(true).SetTitle("File Browser")
+func NewLayout(state *state.AppState, app *tview.Application, ftpClient FTPDriver) tview.Primitive {
+	statusBar := tview.NewTextView().SetWordWrap(false).SetTextColor(tcell.ColorGreen).SetTextAlign(tview.AlignLeft)
+	fileList := tview.NewList()
+	fileList.SetBorder(true)
+	fileList.SetTitle("File Browser")
 
-	// Use Grid with explicit row sizes.
-	// Row 0 = Fixed height (1 line for status bar).
-	// Row 1 = Flexible (-1 takes all remaining space).
-	layout := tview.NewGrid().SetRows(1, -1)
-
-	// AddItem signature: (Primitive, rowStart, colStart, rowSpan, colSpan, xAlign, yAlign, focus)
-	// Note: 'false' for the last argument prevents focus from stealing keyboard events.
-	layout.AddItem(statusBar, 0, 0, 1, 1, tview.AlignLeft, 0, false)
-	layout.AddItem(mainContent, 1, 0, 1, 1, tview.AlignCenter, 0, false)
-
-	// Background goroutine to safely update UI from background FTP calls
 	go func() {
 		for ev := range state.UpdateCh {
 			switch ev.Type {
 			case "status":
-				msg, ok := ev.Data.(string)
-				if !ok {
-					msg = "[unknown]"
+				msg, _ := ev.Data.(string)
+				app.QueueUpdateDraw(func() { statusBar.SetText(msg) })
+			case "files":
+				files, ok := ev.Data.([]string)
+				if !ok || len(files) == 0 {
+					files = []string{"No files found"}
 				}
 				app.QueueUpdateDraw(func() {
-					statusBar.SetText(msg) // Plain text; color handled by SetTextColor()
+					fileList.Clear()
+					for _, f := range files {
+						fileList.AddItem(f, "", 0, nil)
+					}
 				})
-			default:
-				// Future phases will handle "files", "progress", etc.
 			}
 		}
 	}()
 
-	state.UpdateStatus("Ready. Connect to a server when implemented.")
+	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyRune && event.Rune() == 'c' && !state.Connected {
+			state.UpdateStatus("Connecting...")
+			go func() {
+				err := ftpClient.Connect("ftp.funet.fi", 21, "anonymous", "")
+				if err != nil {
+					state.UpdateStatus(fmt.Sprintf("Error: %v", err))
+					return
+				}
+				state.Connected = true
+				files, err := ftpClient.ListDir("/")
+				if err != nil {
+					state.UpdateStatus(fmt.Sprintf("List Error: %v", err))
+					return
+				}
+				state.UpdateFiles(files)
+				state.UpdateStatus("Connected! Files listed.")
+			}()
+			return nil
+		}
+		if event.Key() == tcell.KeyRune && event.Rune() == 'd' && state.Connected {
+			ftpClient.Disconnect()
+			state.Connected = false
+			fileList.Clear()
+			state.UpdateStatus("Disconnected.")
+			return nil
+		}
+		return event
+	})
+
+	state.UpdateStatus("Ready. Press 'c' to connect, 'd' to disconnect.")
+
+	layout := tview.NewGrid().SetRows(1, -1)
+	layout.AddItem(statusBar, 0, 0, 1, 1, tview.AlignLeft, 0, false)
+	layout.AddItem(fileList, 1, 0, 1, 1, tview.AlignCenter, 0, true)
 
 	return layout
 }

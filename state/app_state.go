@@ -1,25 +1,21 @@
 package state
 
-import (
-	"sync"
-)
+import "sync"
 
-// StateEvent represents UI updates from background goroutines
 type StateEvent struct {
-	Type string // "status", "files", "progress", "error"
+	Type string // "status", "files", "error"
 	Data interface{}
 }
 
-// AppState holds centralized application data
 type AppState struct {
 	mu        sync.RWMutex
 	Connected bool
 	Path      string
 	StatusMsg string
+	Files     []string // Added for Phase 2
 	UpdateCh  chan StateEvent
 }
 
-// UpdateStatus safely pushes a status change to the UI channel
 func (s *AppState) UpdateStatus(msg string) {
 	s.mu.Lock()
 	s.StatusMsg = msg
@@ -27,17 +23,18 @@ func (s *AppState) UpdateStatus(msg string) {
 
 	select {
 	case s.UpdateCh <- StateEvent{Type: "status", Data: msg}:
-	default: // Drop if channel full to avoid blocking goroutines
+	default:
 	}
 }
 
-// GetState returns a safe snapshot of current state
-func (s *AppState) GetState() map[string]interface{} {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return map[string]interface{}{
-		"connected": s.Connected,
-		"path":      s.Path,
-		"status":    s.StatusMsg,
+// UpdateFiles pushes a new file list to the UI safely
+func (s *AppState) UpdateFiles(files []string) {
+	s.mu.Lock()
+	s.Files = files // Copy slice reference
+	s.mu.Unlock()
+
+	select {
+	case s.UpdateCh <- StateEvent{Type: "files", Data: files}:
+	default:
 	}
 }

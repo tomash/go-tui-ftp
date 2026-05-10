@@ -21,7 +21,7 @@ func main() {
 
 	// Initialize State and FTP Client separately to keep them decoupled
 	stateData := &state.AppState{
-		UpdateCh: make(chan state.StateEvent, 20),
+		UpdateCh: make(chan state.StateEvent, 64),
 	}
 	ftpClient := ftp.NewClient()
 

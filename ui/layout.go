@@ -14,27 +14,38 @@ type FTPDriver interface {
 	Disconnect() error
 }
 
-func NewLayout(state *state.AppState, app *tview.Application, ftpClient FTPDriver) tview.Primitive {
+func NewLayout(appState *state.AppState, app *tview.Application, ftpClient FTPDriver) tview.Primitive {
 	statusBar := tview.NewTextView().SetWordWrap(false).SetTextColor(tcell.ColorGreen).SetTextAlign(tview.AlignLeft)
 	fileList := tview.NewList()
 	fileList.SetBorder(true)
 	fileList.SetTitle("File Browser")
 
 	go func() {
-		for ev := range state.UpdateCh {
+		for ev := range appState.UpdateCh {
 			switch ev.Type {
 			case "status":
 				msg, _ := ev.Data.(string)
 				app.QueueUpdateDraw(func() { statusBar.SetText(msg) })
 			case "files":
-				files, ok := ev.Data.([]string)
-				if !ok || len(files) == 0 {
-					files = []string{"No files found"}
+				data, ok := ev.Data.(state.FileListData)
+				if !ok {
+					app.QueueUpdateDraw(func() {
+						fileList.Clear()
+						fileList.AddItem("(invalid file list update)", "", 0, nil)
+					})
+					continue
 				}
 				app.QueueUpdateDraw(func() {
 					fileList.Clear()
-					for _, f := range files {
-						fileList.AddItem(f, "", 0, nil)
+					switch {
+					case data.Err != nil:
+						fileList.AddItem("(listing failed)", "", 0, nil)
+					case len(data.Names) == 0:
+						fileList.AddItem("(empty directory)", "", 0, nil)
+					default:
+						for _, f := range data.Names {
+							fileList.AddItem(f, "", 0, nil)
+						}
 					}
 				})
 			}
@@ -42,36 +53,39 @@ func NewLayout(state *state.AppState, app *tview.Application, ftpClient FTPDrive
 	}()
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyRune && event.Rune() == 'c' && !state.Connected {
-			state.UpdateStatus("Connecting...")
+		if event.Key() == tcell.KeyRune && event.Rune() == 'c' && !appState.IsConnected() {
+			appState.UpdateStatus("Connecting...")
 			go func() {
 				err := ftpClient.Connect("ftp.funet.fi", 21, "anonymous", "")
 				if err != nil {
-					state.UpdateStatus(fmt.Sprintf("Error: %v", err))
+					appState.UpdateStatus(fmt.Sprintf("Error: %v", err))
 					return
 				}
-				state.Connected = true
+				appState.SetConnected(true)
 				files, err := ftpClient.ListDir("/")
+				appState.UpdateFiles(state.FileListData{Names: files, Err: err})
 				if err != nil {
-					state.UpdateStatus(fmt.Sprintf("List Error: %v", err))
+					appState.UpdateStatus(fmt.Sprintf("Connected, but listing failed: %v", err))
 					return
 				}
-				state.UpdateFiles(files)
-				state.UpdateStatus("Connected! Files listed.")
+				appState.UpdateStatus("Connected! Files listed.")
 			}()
 			return nil
 		}
-		if event.Key() == tcell.KeyRune && event.Rune() == 'd' && state.Connected {
-			ftpClient.Disconnect()
-			state.Connected = false
-			fileList.Clear()
-			state.UpdateStatus("Disconnected.")
+		if event.Key() == tcell.KeyRune && event.Rune() == 'd' && appState.IsConnected() {
+			if err := ftpClient.Disconnect(); err != nil {
+				appState.UpdateStatus(fmt.Sprintf("Disconnect error: %v", err))
+			} else {
+				appState.SetConnected(false)
+				app.QueueUpdateDraw(func() { fileList.Clear() })
+				appState.UpdateStatus("Disconnected.")
+			}
 			return nil
 		}
 		return event
 	})
 
-	state.UpdateStatus("Ready. Press 'c' to connect, 'd' to disconnect.")
+	appState.UpdateStatus("Ready. Press 'c' to connect, 'd' to disconnect.")
 
 	layout := tview.NewGrid().SetRows(1, -1)
 	layout.AddItem(statusBar, 0, 0, 1, 1, tview.AlignLeft, 0, false)
